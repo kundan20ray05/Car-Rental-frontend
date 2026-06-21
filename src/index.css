@@ -13,3 +13,21 @@
   --color-light: #F1F5F9;
   --color-borderColor: #C4C7D2;
 }
+
+/* Leaflet map fixes */
+.leaflet-container {
+  background-color: #f1f5f9;
+  z-index: 10;
+}
+
+.leaflet-tile-pane {
+  z-index: 2;
+}
+
+.leaflet-popup {
+  z-index: 1000;
+}
+
+.leaflet-control {
+  z-index: 999;
+}

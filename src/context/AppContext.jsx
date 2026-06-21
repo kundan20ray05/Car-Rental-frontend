@@ -1,134 +1,147 @@
-
-import { createContext, useContext, useState, useEffect } from "react";
-import axios from 'axios'
-import { toast } from 'react-hot-toast'
+import { createContext, useContext, useState, useEffect, useRef } from "react";
+import axios from "axios";
+import { toast } from "react-hot-toast";
 import { useNavigate } from "react-router-dom";
+import { useUser, useAuth } from "@clerk/react";
 
-const baseURL = import.meta.env.VITE_BASE_URL?.trim() || 'http://localhost:3000'
-axios.defaults.baseURL = baseURL
+const baseURL =
+  import.meta.env.VITE_BASE_URL?.trim() || "http://localhost:3000";
+axios.defaults.baseURL = baseURL;
 
-const currency = import.meta.env.VITE_CURRENCY?.trim() || '₹'
-const currencyFormatter = new Intl.NumberFormat('en-IN', {
-  style: 'currency',
-  currency: 'INR'
-})
+const currency = import.meta.env.VITE_CURRENCY?.trim() || "₹";
+const currencyFormatter = new Intl.NumberFormat("en-IN", {
+  style: "currency",
+  currency: "INR",
+});
 
 const formatCurrency = (value) => {
-  const amount = Number(value || 0)
-  return currencyFormatter.format(Number.isNaN(amount) ? 0 : amount)
-}
+  const amount = Number(value || 0);
+  return currencyFormatter.format(Number.isNaN(amount) ? 0 : amount);
+};
 
 export const AppContext = createContext();
 
-export const AppProvider = ({children})=>{
+export const AppProvider = ({ children }) => {
+  const navigate = useNavigate();
+  const { user: clerkUser, isSignedIn, isLoaded } = useUser();
+  const { getToken } = useAuth();
+  const getTokenRef = useRef(getToken);
 
-    const navigate = useNavigate()
+  const [user, setUser] = useState(null);
+  const [isOwner, setIsOwner] = useState(false);
+  const [pickupDate, setPickupDate] = useState("");
+  const [returnDate, setReturnDate] = useState("");
+  const [cars, setCars] = useState([]);
 
-    const [token, setToken] = useState(null)
-    const [user, setUser] = useState(null)
-    const [isOwner, setIsOwner] = useState(false)
-    const [showLogin, setShowLogin] = useState(false)
-    const [pickupDate, setPickupDate] = useState('')
-    const [returnDate, setReturnDate] = useState('')
+  // Update getToken ref whenever it changes
+  useEffect(() => {
+    getTokenRef.current = getToken;
+  }, [getToken]);
 
-    const [cars, setCars] = useState([])
+  // Setup axios interceptor once - don't recreate it
+  useEffect(() => {
+    const requestInterceptor = axios.interceptors.request.use(
+      async (config) => {
+        // Only add auth header if user is signed in
+        if (typeof getTokenRef.current === "function") {
+          try {
+            const token = await getTokenRef.current();
+            if (token) {
+              config.headers.Authorization = `Bearer ${token}`;
+            }
+          } catch (error) {
+            console.error("Error getting token:", error);
+            // If token retrieval fails, continue without it
+          }
+        }
+        return config;
+      },
+      (error) => Promise.reject(error),
+    );
 
-    // Function to check if user is logged in
+    // Don't set up response interceptor repeatedly
+    return () => {
+      axios.interceptors.request.eject(requestInterceptor);
+    };
+  }, []); // Empty dependency - set up once only
 
-   const fetchUser = async ()=>{
-    try {
-       const { data } =  await axios.get('/api/user/data')
-       if(data.success){
-        setUser(data.user)
-        setIsOwner(data.user.role === 'owner')
-       } else {
-        navigate('/')
-       }
-    } catch (error) {
-        toast.error(error.message)
+  // Separate effect for handling auth state changes
+  useEffect(() => {
+    if (isLoaded && !isSignedIn) {
+      // Clear auth data on sign out
+      setUser(null);
+      setIsOwner(false);
     }
-   }
-      
-   // Function to fetch all cars from the server
+  }, [isSignedIn, isLoaded]);
 
-   const fetchCars = async ()=>{
+  // Function to fetch user profile from backend
+  const fetchUser = async (token) => {
     try {
-     const { data } =   await axios.get('/api/user/cars')
-     data.success ? setCars(data.cars) : toast.error(data.message)
-    } catch (error) {
-         toast.error(error.message)
-    }
-   }
-     
-   // Function to log out the user
-   const logout = ()=>{
-    localStorage.removeItem('token')
-    setToken(null)
-    setUser(null)
-    setIsOwner(false)
-    axios.defaults.headers.common['Authorization'] = ''
-    toast.success('You have been logged out')
-   }
-
-   const loginUser = async (email, password) => {
-    try {
-      const { data } = await axios.post('/api/user/login', { email, password })
+      const { data } = await axios.get("/api/user/data", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       if (data.success) {
-        localStorage.setItem('token', data.token)
-        setToken(data.token)
-        axios.defaults.headers.common['Authorization'] = `Bearer ${data.token}`
-        return { success: true }
+        setUser(data.user);
+        setIsOwner(data.user.role === "owner");
       }
-      return { success: false, message: data.message }
     } catch (error) {
-      return { success: false, message: error?.response?.data?.message || error.message }
+      console.log(error.message);
     }
-   }
+  };
 
-   const registerUser = async (name, email, password) => {
+  // Function to fetch all cars from the server
+  const fetchCars = async (token) => {
     try {
-      const { data } = await axios.post('/api/user/register', { name, email, password })
-      if (data.success) {
-        localStorage.setItem('token', data.token)
-        setToken(data.token)
-        axios.defaults.headers.common['Authorization'] = `Bearer ${data.token}`
-        return { success: true }
-      }
-      return { success: false, message: data.message }
+      const { data } = await axios.get("/api/user/cars", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      data.success ? setCars(data.cars) : toast.error(data.message);
     } catch (error) {
-      return { success: false, message: error?.response?.data?.message || error.message }
+      toast.error(error.message);
     }
-   }
+  };
 
+  // Sync Clerk user with backend on sign in
+  useEffect(() => {
+    if (isLoaded && isSignedIn && clerkUser) {
+      getToken().then((token) => {
+        if (token) {
+          fetchUser(token);
+          fetchCars(token);
+        }
+      });
+    } else if (isLoaded && !isSignedIn) {
+      // Clear user data on sign out
+      setUser(null);
+      setIsOwner(false);
+    }
+  }, [isSignedIn, isLoaded, clerkUser, getToken]);
 
-   // useEffect to retrieve the token from localStorage
-   useEffect(()=>{
-    const token = localStorage.getItem('token')
-    setToken(token)
-    fetchCars()
-   }, [])
+  const value = {
+    navigate,
+    currency,
+    formatCurrency,
+    axios,
+    user,
+    setUser,
+    isOwner,
+    setIsOwner,
+    fetchUser,
+    showLogin: false,
+    setShowLogin: () => {},
+    fetchCars,
+    cars,
+    setCars,
+    pickupDate,
+    setPickupDate,
+    returnDate,
+    setReturnDate,
+    isSignedIn,
+    clerkUser,
+  };
 
-   // userEffect to fetch user data when token is available
-
-    useEffect(()=>{
-   if(token) {
-      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`
-      fetchUser()
-   }
-   }, [token])
-   
-
-
-const value ={
-  navigate, currency, formatCurrency, axios, user, setUser, token, setToken, isOwner, setIsOwner, 
-  fetchUser, loginUser, registerUser, showLogin, setShowLogin, logout, fetchCars, cars, setCars, pickupDate, setPickupDate, returnDate, setReturnDate
-}
-
-    return( 
-    <AppContext.Provider value={value}>
-       {children}
-    </AppContext.Provider>)
-}
+  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+};
 export const useAppContext = () => {
-  return useContext(AppContext)
-}
+  return useContext(AppContext);
+};
